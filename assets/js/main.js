@@ -68,6 +68,21 @@
 
   if (reduceMotion) return; // the motion engine below is skipped entirely
 
+  document.body.classList.add('js');
+
+  /* Images fade in over a paper placeholder instead of flashing white */
+  (function armImages(){
+    var imgs = document.querySelectorAll('.sheet-frame img, .loop-track img, .hero-img');
+    Array.prototype.forEach.call(imgs, function (im){
+      var on = function(){ im.classList.add('ok'); };
+      if (im.complete && im.naturalWidth > 0) { on(); }
+      else {
+        im.addEventListener('load', on, { once:true });
+        im.addEventListener('error', on, { once:true });
+      }
+    });
+  })();
+
   /* ---------- Lenis buttery smooth scroll ---------- */
   var lenis = null;
   if (typeof Lenis !== 'undefined') {
@@ -98,6 +113,11 @@
   var hOn = desktopPin && !reduceMotion;
   if (hOn) document.documentElement.classList.add('h-on');
 
+  // Document-relative top: immune to scroll, so the frame loop never
+  // forces a layout read (the old getBoundingClientRect-per-frame calls
+  // starved the animation loop and made wheel scrolling stall-and-jump).
+  function docTop(el){ var t = 0; while (el){ t += el.offsetTop; el = el.offsetParent; } return t; }
+
   var chapters = [];
   document.querySelectorAll('.chapter').forEach(function (sec) {
     var wrap = sec.querySelector('.hwrap');
@@ -110,25 +130,56 @@
       panels: Array.prototype.slice.call(track.querySelectorAll('.hpanel')),
       cur: sec.querySelector('.hmeta-cur'),
       bar: sec.querySelector('.hmeta-bar i'),
-      dist: 0
+      dist: 0, wrapTop: 0, wrapH: 0
     });
   });
 
-  function layoutChapters() {
-    if (!hOn) return;
-    chapters.forEach(function (c) {
-      c.dist = Math.max(0, c.track.scrollWidth - window.innerWidth);
-      c.wrap.style.height = (window.innerHeight + c.dist) + 'px';
-    });
-  }
-  layoutChapters();
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(layoutChapters);
-  window.addEventListener('load', layoutChapters);
-  var rzT = null;
-  window.addEventListener('resize', function () {
-    clearTimeout(rzT);
-    rzT = setTimeout(layoutChapters, 150);
+  var driftEls = Array.prototype.slice.call(document.querySelectorAll('[data-drift]'));
+
+  var hudChapter = document.getElementById('hudChapter');
+  var hudFill = document.getElementById('hudFill');
+  var hudZones = [];
+  document.querySelectorAll('[data-hud], [data-chapter]').forEach(function (el) {
+    hudZones.push({ el: el, label: el.getAttribute('data-chapter') || el.getAttribute('data-hud'), top: 0, bot: 0 });
   });
+  var docH = 1, marqueeHalf = 0;
+
+  // Single measurement pass: heights first (they shift later sections),
+  // then every document-relative position. Called on init, font load,
+  // window load and resize — never per frame.
+  function measure() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var i, j, c;
+    if (hOn) {
+      for (i = 0; i < chapters.length; i++) {
+        c = chapters[i];
+        c.dist = Math.max(0, c.track.scrollWidth - vw);
+        c.wrap.style.height = (vh + c.dist) + 'px';
+      }
+      for (i = 0; i < chapters.length; i++) {
+        c = chapters[i];
+        c.wrapTop = docTop(c.wrap);
+        c.wrapH = c.wrap.offsetHeight;
+        for (j = 0; j < c.panels.length; j++) {
+          var p = c.panels[j];
+          p._ox = p.offsetLeft;
+          p._ow = p.offsetWidth;
+          if (!p._img) p._img = p.querySelector('.sheet-frame img');
+        }
+      }
+    }
+    for (i = 0; i < driftEls.length; i++) {
+      driftEls[i]._top = docTop(driftEls[i]);
+      driftEls[i]._h = driftEls[i].offsetHeight;
+    }
+    for (i = 0; i < hudZones.length; i++) {
+      hudZones[i].top = docTop(hudZones[i].el);
+      hudZones[i].bot = hudZones[i].top + hudZones[i].el.offsetHeight;
+    }
+    docH = Math.max(1, document.documentElement.scrollHeight - vh);
+    for (i = 0; i < ribbons.length; i++) ribbons[i].half = ribbons[i].track.scrollWidth / 2;
+    if (marqueeTrack) marqueeHalf = marqueeTrack.scrollWidth / 2;
+  }
 
   /* ---------- Infinite loops: marquee + image ribbons (JS-driven, velocity-reactive) ---------- */
   var marquee = document.getElementById('marquee');
@@ -144,13 +195,13 @@
       track: track,
       dir: parseInt(r.getAttribute('data-dir') || '1', 10),
       x: 0,
-      base: 0.55
+      base: 0.55,
+      half: 0
     });
   });
 
-  function driveLoop(track, state, base, dir, vel, skewAmt) {
-    var half = track.scrollWidth / 2;
-    if (half <= 0) return;
+  function driveLoop(track, state, base, dir, vel, skewAmt, half) {
+    if (!(half > 0)) return;
     state.x -= dir * (base + Math.min(Math.abs(vel) * 0.35, 7));
     state.x = -((((-state.x) % half) + half) % half); // wrap into [-half, 0)
     var skew = clamp(-vel * skewAmt, -10, 10);
@@ -159,16 +210,14 @@
   }
   var marqueeState = { x: 0 };
 
-  /* ---------- Scrubbed side-drift entrances ---------- */
-  var driftEls = Array.prototype.slice.call(document.querySelectorAll('[data-drift]'));
-
-  function updateDrift(vh) {
+  /* ---------- Scrubbed side-drift entrances (rect-free: positions cached in measure()) ---------- */
+  function updateDrift(y, vh) {
     for (var i = 0; i < driftEls.length; i++) {
       var el = driftEls[i];
-      var r = el.getBoundingClientRect();
-      if (r.bottom < -80 || r.top > vh + 80) continue;
+      var top = el._top - y;
+      if (top + el._h < -80 || top > vh + 80) continue;
       var dir = el.getAttribute('data-drift') === 'left' ? -1 : 1;
-      var centerVh = (r.top + r.height / 2) / vh;
+      var centerVh = (top + el._h / 2) / vh;
       // t: 0 as the element approaches the viewport, 1 once it settles near the upper half
       var t = clamp((1.08 - centerVh) / (1.08 - 0.38), 0, 1);
       var e = 1 - Math.pow(1 - t, 3);
@@ -181,6 +230,7 @@
   var heroFrame = document.getElementById('heroFrame');
   var heroImg = document.getElementById('heroImg');
   var heroFoot = document.getElementById('heroFoot');
+  var heroGhost = document.getElementById('heroGhost');
 
   function updateHero(y, vh) {
     if (y > vh * 1.4) return;
@@ -189,25 +239,22 @@
       heroFrame.style.transform =
         'translate3d(0,' + (y * 0.22).toFixed(1) + 'px,0) scale(' + s.toFixed(4) + ')';
     }
+    if (heroGhost) {
+      heroGhost.style.transform = 'translate3d(0,' + (y * 0.16).toFixed(1) + 'px,0)';
+    }
     if (heroFoot) {
       heroFoot.style.opacity = clamp(1 - y / (vh * 0.55), 0, 1).toFixed(3);
       heroFoot.style.transform = 'translate3d(0,' + (y * 0.12).toFixed(1) + 'px,0)';
     }
   }
 
-  /* ---------- Chapter HUD ---------- */
-  var hudChapter = document.getElementById('hudChapter');
-  var hudFill = document.getElementById('hudFill');
-  var hudZones = [];
-  document.querySelectorAll('[data-hud], [data-chapter]').forEach(function (el) {
-    hudZones.push({ el: el, label: el.getAttribute('data-chapter') || el.getAttribute('data-hud') });
-  });
+  /* ---------- Chapter HUD (rect-free) ---------- */
 
   function updateHud(y, vh) {
     var mid = vh / 2;
     for (var i = 0; i < hudZones.length; i++) {
-      var r = hudZones[i].el.getBoundingClientRect();
-      if (r.top <= mid && r.bottom >= mid) {
+      var top = hudZones[i].top - y, bot = hudZones[i].bot - y;
+      if (top <= mid && bot >= mid) {
         if (hudChapter && hudChapter.textContent !== hudZones[i].label) {
           hudChapter.textContent = hudZones[i].label;
         }
@@ -215,12 +262,11 @@
       }
     }
     if (hudFill) {
-      var doc = document.documentElement.scrollHeight - vh;
-      hudFill.style.transform = 'scaleX(' + clamp(doc > 0 ? y / doc : 0, 0, 1).toFixed(4) + ')';
+      hudFill.style.transform = 'scaleX(' + clamp(y / docH, 0, 1).toFixed(4) + ')';
     }
   }
 
-  /* ---------- Master scroll loop ---------- */
+  /* ---------- Master scroll loop: zero layout reads per frame ---------- */
   var lastY = window.scrollY;
   var vel = 0;
 
@@ -237,11 +283,12 @@
     if (hOn) {
       for (var i = 0; i < chapters.length; i++) {
         var c = chapters[i];
-        var r = c.wrap.getBoundingClientRect();
-        if (r.bottom < 0 || r.top > vh) continue;
-        var total = c.wrap.offsetHeight - vh;
-        var p = total > 0 ? clamp(-r.top / total, 0, 1) : 0;
-        c.track.style.transform = 'translate3d(' + (-p * c.dist).toFixed(1) + 'px,0,0)';
+        var top = c.wrapTop - y;
+        if (top + c.wrapH < 0 || top > vh) continue;
+        var total = c.wrapH - vh;
+        var p = total > 0 ? clamp(-top / total, 0, 1) : 0;
+        var tx = -p * c.dist;
+        c.track.style.transform = 'translate3d(' + tx.toFixed(1) + 'px,0,0)';
         if (c.bar) c.bar.style.transform = 'scaleX(' + p.toFixed(3) + ')';
         if (c.cur) {
           var idx = Math.min(c.panels.length, Math.floor(p * c.panels.length) + 1);
@@ -251,11 +298,10 @@
         // Inner parallax: sheet images drift against the track for layered depth
         if (p > 0 && p < 1) {
           for (var j = 0; j < c.panels.length; j++) {
-            var img = c.panels[j].querySelector('.sheet-frame img');
-            if (!img) continue;
-            var pr = c.panels[j].getBoundingClientRect();
-            var off = (pr.left + pr.width / 2) - vw / 2;
-            img.style.transform =
+            var pj = c.panels[j];
+            if (!pj._img) continue;
+            var off = (pj._ox + pj._ow / 2 + tx) - vw / 2;
+            pj._img.style.transform =
               'translate3d(' + (-off * 0.055).toFixed(1) + 'px,0,0) scale(1.06)';
           }
         }
@@ -263,17 +309,26 @@
     }
 
     // Infinite loops react to scroll velocity
-    if (marqueeTrack) driveLoop(marqueeTrack, marqueeState, 0.9, 1, vel, 0.5);
+    if (marqueeTrack) driveLoop(marqueeTrack, marqueeState, 0.9, 1, vel, 0.5, marqueeHalf);
     for (var k = 0; k < ribbons.length; k++) {
-      driveLoop(ribbons[k].track, ribbons[k], ribbons[k].base, ribbons[k].dir, vel, 0.35);
+      driveLoop(ribbons[k].track, ribbons[k], ribbons[k].base, ribbons[k].dir, vel, 0.35, ribbons[k].half);
     }
 
-    updateDrift(vh);
+    updateDrift(y, vh);
     updateHero(y, vh);
     updateHud(y, vh);
 
     requestAnimationFrame(frame);
   }
+
+  measure();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(measure);
+  window.addEventListener('load', measure);
+  var rzT = null;
+  window.addEventListener('resize', function () {
+    clearTimeout(rzT);
+    rzT = setTimeout(measure, 150);
+  });
   requestAnimationFrame(frame);
 
   if (!finePointer) return; // pointer-only features below are desktop-only
