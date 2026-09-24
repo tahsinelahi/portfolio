@@ -228,7 +228,10 @@ body.js .loop-track img.ok{opacity:.92}
 .hmeta{display:none}
 .hpanel--outro{display:none}
 
-html.h-on .chapter{padding:0;overflow:hidden}
+html.h-on .chapter{padding:0;overflow:clip}
+/* overflow:clip (not hidden) is deliberate: overflow:hidden would turn .chapter
+   into a scroll container and silently unpin position:sticky, leaving the tall
+   .hwrap behind as a giant blank void. clip keeps clipping without breaking the pin. */
 html.h-on .hwrap{position:relative}
 html.h-on .hsticky{
   position:sticky;top:0;height:100vh;height:100svh;overflow:hidden;
