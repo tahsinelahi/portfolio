@@ -323,7 +323,11 @@
 
   measure();
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(measure);
-  window.addEventListener('load', measure);
+  window.addEventListener('load', function () { measure(); setTimeout(measure, 1200); });
+  // The hero cover is the biggest layout shifter above the chapters — re-measure once it lands
+  if (heroImg && !(heroImg.complete && heroImg.naturalWidth > 0)) {
+    heroImg.addEventListener('load', measure, { once:true });
+  }
   var rzT = null;
   window.addEventListener('resize', function () {
     clearTimeout(rzT);
