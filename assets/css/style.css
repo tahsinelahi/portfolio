@@ -358,8 +358,8 @@ body.js .hero-img.ok{opacity:1}
 /* ---------- Contact ---------- */
 .contact{background:var(--black);color:var(--white);padding:clamp(6rem,12vw,11rem) 0}
 .contact-title{
-  font-family:var(--display);font-size:clamp(3.6rem,13vw,12rem);
-  line-height:.92;text-transform:uppercase;margin-bottom:3rem;
+  font-family:var(--display);font-size:clamp(3rem,10.5vw,9rem);
+  line-height:1.08;letter-spacing:.015em;text-transform:uppercase;margin-bottom:3rem;
 }
 .contact-title .dot{color:var(--orange);font-style:normal}
 .contact-links{display:flex;flex-direction:column;gap:1.4rem;align-items:flex-start}
